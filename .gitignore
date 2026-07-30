@@ -1,0 +1,16 @@
+# Xcode
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# XcodeGen 生成的工程文件（克隆后用 `xcodegen generate` 重新生成）
+ValCompass.xcodeproj/
+
+# macOS
+.DS_Store
+
+# 本地 AI 代理技能配置（开发工具，不属于产品代码）
+.agents/
