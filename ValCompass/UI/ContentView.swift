@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// 总览：20 个标的按市场分组，缓存优先 + 下拉刷新。
+/// 总览：20 个标的按市场分组成卡片，缓存优先 + 下拉刷新。
+/// 顶部分布条既是「当前各档有几个标的」的事实陈述，也是五档色阶的图例。
 /// 克制呈现估值：分数只表示「相对自身历史的位置」，不代表买卖建议。
 struct ContentView: View {
     @Environment(MarketRepository.self) private var repository
@@ -33,28 +34,35 @@ struct ContentView: View {
         !repository.isRefreshing && repository.snapshots.allSatisfy { $0.status == .noData }
     }
 
+    /// 已评分标的在五档中的分布
+    private var zoneCounts: [ValuationZone: Int] {
+        var counts: [ValuationZone: Int] = [:]
+        for snap in repository.snapshots {
+            if let zone = snap.result?.zone {
+                counts[zone, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
     var body: some View {
         NavigationStack {
             Group {
                 if isEmptyState {
-                    emptyState
+                    VStack(spacing: 0) {
+                        brandHeader
+                            .padding(.horizontal, Spacing.m + Spacing.xs)
+                            .padding(.top, Spacing.s)
+                        emptyState
+                    }
                 } else {
-                    overviewList
+                    overview
                 }
             }
             .background(Theme.background)
-            .navigationTitle("估值罗盘")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        showInfo = true
-                    } label: {
-                        Image(systemName: "info.circle")
-                            .foregroundStyle(Theme.accent)
-                    }
-                    .accessibilityLabel("方法说明与免责声明")
-                }
-            }
+            // 品牌标题由内容自行绘制（衬线大标题 + 副标题），因此隐藏系统导航栏，
+            // 既统一了字体，也省下大标题区约 60pt 的空白。
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showInfo) {
                 MethodologyView()
             }
@@ -65,66 +73,136 @@ struct ContentView: View {
         .tint(Theme.accent)
     }
 
-    // MARK: 列表
+    // MARK: 品牌头部
 
-    private var overviewList: some View {
-        List {
-            timestampHeader
-            ForEach(Self.groups) { group in
-                Section {
-                    ForEach(group.targets) { target in
-                        NavigationLink(value: target) {
-                            TargetRowView(
-                                target: target,
-                                snapshot: repository.snapshots.first { $0.id == target.id }
-                                    ?? TargetSnapshot(id: target.id)
-                            )
-                        }
-                    }
-                } header: {
-                    Text(group.title)
-                        .font(AppFont.sectionTitle)
-                        .foregroundStyle(Theme.textPrimary)
-                        .textCase(nil)
-                        .padding(.bottom, 2)
-                }
+    private var brandHeader: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("估值罗盘")
+                    .font(AppFont.serif(31, .bold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("\(TargetCatalog.all.count) 个标的相对自身近 10 年历史的估值分位")
+                    .font(AppFont.footnote)
+                    .foregroundStyle(Theme.textTertiary)
             }
-            disclaimerFooter
+            Spacer(minLength: Spacing.s)
+            Button {
+                showInfo = true
+            } label: {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(Theme.accent)
+            }
+            .accessibilityLabel("方法说明与免责声明")
+            .padding(.top, 4)
         }
-        .listStyle(.plain)
-        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: 主体
+
+    private var overview: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Spacing.l) {
+                brandHeader
+                    .padding(.horizontal, Spacing.xs)
+                    .padding(.bottom, -Spacing.s)
+                summaryCard
+                ForEach(Self.groups) { group in
+                    VStack(alignment: .leading, spacing: 10) {
+                        SectionTitle(group.title, trailing: "\(group.targets.count) 个")
+                            .padding(.horizontal, Spacing.xs)
+                        groupCard(group)
+                    }
+                }
+                disclaimerFooter
+            }
+            .padding(.horizontal, Spacing.m)
+            .padding(.top, Spacing.s)
+            .padding(.bottom, Spacing.xl)
+        }
+        #if DEBUG
+        // 调试：-debugBottom 直接滚到底部，便于截图验证下方分组与页脚
+        .defaultScrollAnchor(ProcessInfo.processInfo.arguments.contains("-debugBottom") ? .bottom : .top)
+        #endif
         .refreshable { await repository.refreshAll() }
     }
 
-    private var timestampHeader: some View {
-        HStack(spacing: 6) {
+    private func groupCard(_ group: MarketGroup) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(group.targets.enumerated()), id: \.element.id) { index, target in
+                NavigationLink(value: target) {
+                    TargetRowView(
+                        target: target,
+                        snapshot: repository.snapshots.first { $0.id == target.id }
+                            ?? TargetSnapshot(id: target.id)
+                    )
+                }
+                .buttonStyle(CardRowButtonStyle())
+                if index < group.targets.count - 1 {
+                    CardDivider(inset: Spacing.m)
+                }
+            }
+        }
+        .clipShape(.rect(cornerRadius: Radius.card, style: .continuous))
+        .cardBackground()
+    }
+
+    // MARK: 顶部概览（时间戳 + 五档分布）
+
+    private var summaryCard: some View {
+        Card(padding: Spacing.m) {
+            HStack(alignment: .firstTextBaseline) {
+                Eyebrow("估值分位分布")
+                Spacer()
+                timestampLabel
+            }
+            if zoneCounts.isEmpty {
+                ContentNote(text: repository.isRefreshing
+                            ? "正在计算各标的估值分位…"
+                            : "暂无可用评分，分布不可用。")
+            } else {
+                ZoneDistributionBar(counts: zoneCounts)
+                Text("当前 \(zoneCounts.values.reduce(0, +)) 个标的按分位落在各档的数量。分布只描述各标的相对自身历史的位置，不是对市场整体的判断。")
+                    .font(AppFont.footnote)
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var timestampLabel: some View {
+        HStack(spacing: 5) {
             if repository.isRefreshing {
                 ProgressView()
-                    .controlSize(.small)
-                Text("正在刷新数据…")
+                    .controlSize(.mini)
+                Text("正在刷新")
             } else if let updated = repository.lastUpdatedAt {
-                Text("数据更新于 \(Formatters.dateTime.string(from: updated))")
+                Text("更新于 \(Formatters.dateTime.string(from: updated))")
             } else {
                 Text("数据尚未更新")
             }
         }
-        .font(AppFont.caption)
+        .font(AppFont.footnote)
         .foregroundStyle(Theme.textTertiary)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 4, leading: Spacing.m, bottom: 0, trailing: Spacing.m))
     }
+
+    // MARK: 页脚免责声明
 
     private var disclaimerFooter: some View {
         VStack(alignment: .leading, spacing: Spacing.s) {
-            Divider().overlay(Theme.divider)
+            Rectangle()
+                .fill(Theme.divider)
+                .frame(width: 28, height: 1)
             Text("本应用仅为信息与研究工具，不构成投资建议，不保证任何收益。估值分数反映当前水平相对自身历史的位置：分数低不代表应当买入，分数高不代表应当卖出。")
                 .font(AppFont.footnote)
+                .lineSpacing(3)
                 .foregroundStyle(Theme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, Spacing.s)
-        .listRowSeparator(.hidden)
-        .listRowBackground(Color.clear)
+        .padding(.top, Spacing.xs)
+        .padding(.horizontal, Spacing.xs)
     }
 
     // MARK: 空态（无网络 + 无缓存）

@@ -9,8 +9,15 @@ settings:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
+    # 真机必须签名（模拟器不校验签名，真机会拒绝未签名的可执行文件）。
+    # 只对模拟器关闭签名：README 里的 xcodebuild 模拟器命令无需证书也能跑。
+    # 团队 ID 不入库：真机构建时在命令行覆盖，例如
+    #   xcodebuild ... -destination 'generic/platform=iOS' DEVELOPMENT_TEAM=你的团队ID
+    # 或在 Xcode 的 Signing & Capabilities 里选择（.xcodeproj 已被 gitignore，
+    # 重新 xcodegen generate 会重置该选择，命令行覆盖更可靠）。
+    CODE_SIGN_STYLE: Automatic
     DEVELOPMENT_TEAM: ""
-    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_ALLOWED[sdk=iphonesimulator*]: "NO"
 targets:
   ValCompass:
     type: application
@@ -21,6 +28,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.valcompass.ios
         INFOPLIST_FILE: ValCompass/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: "NO"
         SWIFT_STRICT_CONCURRENCY: minimal
