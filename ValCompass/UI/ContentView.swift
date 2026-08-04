@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 总览：20 个标的按市场分组成卡片，缓存优先 + 下拉刷新。
+/// 总览：可见标的按市场分组成卡片，缓存优先 + 下拉刷新。
 /// 顶部分布条既是「当前各档有几个标的」的事实陈述，也是五档色阶的图例。
 /// 克制呈现估值：分数只表示「相对自身历史的位置」，不代表买卖建议。
 struct ContentView: View {
@@ -20,13 +20,13 @@ struct ContentView: View {
 
     private static let groups: [MarketGroup] = [
         MarketGroup(id: "cn-index", title: "A股指数",
-              targets: TargetCatalog.all.filter { $0.market == .cn && $0.kind == .index }),
+              targets: TargetCatalog.visible.filter { $0.market == .cn && $0.kind == .index }),
         MarketGroup(id: "cn-etf", title: "A股ETF",
-              targets: TargetCatalog.all.filter { $0.market == .cn && $0.kind == .etf }),
+              targets: TargetCatalog.visible.filter { $0.market == .cn && $0.kind == .etf }),
         MarketGroup(id: "hk", title: "港股",
-              targets: TargetCatalog.all.filter { $0.market == .hk }),
+              targets: TargetCatalog.visible.filter { $0.market == .hk }),
         MarketGroup(id: "us", title: "美股",
-              targets: TargetCatalog.all.filter { $0.market == .us }),
+              targets: TargetCatalog.visible.filter { $0.market == .us }),
     ]
 
     /// 无网络且无缓存：刷新结束后仍全部无数据
@@ -34,10 +34,11 @@ struct ContentView: View {
         !repository.isRefreshing && repository.snapshots.allSatisfy { $0.status == .noData }
     }
 
-    /// 已评分标的在五档中的分布
+    /// 已评分标的在五档中的分布（只统计可见标的；隐藏底层指数不计入）
     private var zoneCounts: [ValuationZone: Int] {
+        let visibleIDs = Set(TargetCatalog.visible.map(\.id))
         var counts: [ValuationZone: Int] = [:]
-        for snap in repository.snapshots {
+        for snap in repository.snapshots where visibleIDs.contains(snap.id) {
             if let zone = snap.result?.zone {
                 counts[zone, default: 0] += 1
             }
@@ -81,7 +82,7 @@ struct ContentView: View {
                 Text("估值罗盘")
                     .font(AppFont.serif(31, .bold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("\(TargetCatalog.all.count) 个标的相对自身近 10 年历史的估值分位")
+                Text("\(TargetCatalog.visible.count) 个标的相对自身近 10 年历史的估值分位")
                     .font(AppFont.footnote)
                     .foregroundStyle(Theme.textTertiary)
             }

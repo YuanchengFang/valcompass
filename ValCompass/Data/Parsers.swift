@@ -156,6 +156,53 @@ enum EastmoneyFundParser {
     }
 }
 
+// MARK: - 东方财富数据中心：中/美 10 年期国债收益率解析
+// 响应：{"result":{"pages":19,"count":9310,"data":[{"SOLAR_DATE":"2026-07-29 00:00:00",
+//   "EMM00166466":1.7329,"EMG00001310":4.67},...]},"success":true,...}
+// EMM00166466=中国 10Y，EMG00001310=美国 10Y（均可为 null）；按日期倒序。
+// 服务端 pageSize 上限 500（请求 3000 也只回 500），需按 pages 翻页。
+// 历史锚点已验证：2018-01 CN≈3.9、2020-04 CN≈2.5/US≈0.6-0.8、2024-12 CN≈1.7-2.0/US≈4.2-4.6。
+struct TreasuryYieldPage: Equatable {
+    var pages: Int          // 总页数（用于翻页终止判断）
+    var points: [YieldPoint] // 本页数据，已翻转为升序
+}
+
+enum TreasuryYieldParser {
+    private struct Row: Decodable {
+        let SOLAR_DATE: String
+        let EMM00166466: Double?
+        let EMG00001310: Double?
+    }
+    private struct Result: Decodable {
+        let pages: Int
+        let data: [Row]
+    }
+    private struct Response: Decodable {
+        let success: Bool
+        let result: Result?
+    }
+
+    static func parse(_ data: Data) throws -> TreasuryYieldPage {
+        let resp: Response
+        do {
+            resp = try JSONDecoder().decode(Response.self, from: data)
+        } catch {
+            throw ParserError.badFormat("JSON 解析失败: \(error.localizedDescription)")
+        }
+        guard resp.success, let result = resp.result else {
+            throw ParserError.badFormat("success != true 或缺少 result")
+        }
+        let points = result.data.compactMap { row -> YieldPoint? in
+            // "2026-07-29 00:00:00" → "2026-07-29"
+            let date = String(row.SOLAR_DATE.prefix(10))
+            guard date.count == 10, date.contains("-") else { return nil }
+            return YieldPoint(date: date, cn10y: row.EMM00166466, us10y: row.EMG00001310)
+        }
+        guard !points.isEmpty else { throw ParserError.noRows }
+        return TreasuryYieldPage(pages: result.pages, points: points.reversed())
+    }
+}
+
 // MARK: - multpl 标普500市盈率解析（月度，HTML 表格）
 // 真实结构：行形如
 //   <tr class="even">
@@ -194,6 +241,8 @@ enum MultplParser {
             valueText = valueText.replacingOccurrences(of: #"&#x[0-9A-Fa-f]+;|&[a-z]+;"#,
                                                        with: "", options: .regularExpression)
             valueText = valueText.replacingOccurrences(of: "†", with: "")
+            // 股息率表的值带百分号（如 1.10%），PE 表没有；统一剔除不影响 PE 解析
+            valueText = valueText.replacingOccurrences(of: "%", with: "")
             valueText = valueText.trimmingCharacters(in: .whitespacesAndNewlines)
                                    .replacingOccurrences(of: ",", with: "")
             guard let value = Double(valueText),

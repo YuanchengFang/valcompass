@@ -14,7 +14,8 @@ enum DataSourceKind: String, Codable {
     case sina       // 新浪美股日线
     case csindex    // 中证指数官网市盈率
     case eastmoney  // 天天基金净值
-    case multpl     // multpl.com 标普500市盈率（月度）
+    case multpl     // multpl.com 标普500市盈率/股息率（月度）
+    case eastmoneyYield // 东方财富数据中心：中/美 10 年期国债收益率
 }
 
 /// 日线行情（指数点位或 ETF 市价）
@@ -66,6 +67,38 @@ struct FundNavSeries: Codable, Equatable {
     var fundName: String
     var points: [FundNavPoint]
     var asOfDate: String? { points.last?.date }
+}
+
+/// 10 年期国债收益率（东方财富数据中心，日度；周末/假日无值，由计算层向前填充）
+struct YieldPoint: Codable, Equatable {
+    var date: String        // yyyy-MM-dd
+    var cn10y: Double?      // 中国 10Y，百分数（如 1.72 表示 1.72%）
+    var us10y: Double?      // 美国 10Y；部分日期缺失（美方假日/发布滞后）
+}
+
+struct YieldSeries: Codable, Equatable {
+    var meta: SeriesMeta
+    var points: [YieldPoint]    // 升序
+    var asOfDate: String? { points.last?.date }
+}
+
+// MARK: - 辅助估值指标（「其他视角」，不并入主分数）
+
+/// 指标方向：决定「百分位越高」意味着什么，展示时必须与主分数方向区分清楚
+enum MetricDirection: String, Codable, Equatable {
+    case higherCheaper = "越高越便宜"   // ERP、股息率：与主分数方向相反
+    case higherExpensive = "越高越贵"   // CAPE 分位：与主分数同向
+}
+
+/// 一条辅助估值指标：名称/当前值/百分位/方向/数据截至/一句方法说明
+struct SecondaryMetric: Equatable {
+    var name: String
+    var valueText: String          // 当前值展示文本，如 "5.20%"
+    var percentile: Double         // 0–100，近 10 年（不足则全部）序列中的分位
+    var direction: MetricDirection
+    var asOf: String               // 数据截至日期
+    var note: String               // 一句方法说明（含方向提示与局限）
+    var confidence: Confidence     // 辅助指标一律偏保守
 }
 
 // MARK: - 日期工具

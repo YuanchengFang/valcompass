@@ -37,4 +37,8 @@ final class CacheStore {
     static func priceKey(_ targetID: String) -> String { "\(targetID)-price" }
     static func peKey(_ targetID: String) -> String { "\(targetID)-pe" }
     static func navKey(_ targetID: String) -> String { "\(targetID)-nav" }
+    static func yieldKey() -> String { "treasury-10y-yield" }
+    // 标普500 辅助数据（挂 spx 名下，非独立标的）
+    static func spxShillerPEKey() -> String { "spx-pe-shiller" }
+    static func spxDividendYieldKey() -> String { "spx-dividend-yield" }
 }

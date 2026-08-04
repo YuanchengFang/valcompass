@@ -111,7 +111,7 @@ struct RowScoreTrack: View {
 }
 
 // MARK: - 五档分布条
-// 总览页顶部：20 个标的当前落在各档的数量，按比例分段。
+// 总览页顶部：可见标的当前落在各档的数量，按比例分段。
 // 只陈述分布事实，不做整体判断；同时充当五档色阶的图例。
 
 struct ZoneDistributionBar: View {

@@ -124,4 +124,39 @@ struct MarketDataFetcher {
         return PESeries(meta: SeriesMeta(source: .multpl, fetchedAt: now(), currency: .usd,
                                          isMonthly: true, isDelayed: false), points: points)
     }
+
+    /// multpl 标普500 股息率（月度；复用 PE 表解析器，值字段即股息率百分数）。
+    func fetchMultplDividendYield() async throws -> PESeries {
+        let url = "https://www.multpl.com/s-p-500-dividend-yield/table/by-month"
+        let data = try await client.get(url)
+        let points = try MultplParser.parse(data)
+        return PESeries(meta: SeriesMeta(source: .multpl, fetchedAt: now(), currency: .usd,
+                                         isMonthly: true, isDelayed: false), points: points)
+    }
+
+    /// 中/美 10 年期国债收益率（东方财富数据中心，日度）。
+    /// 服务端 pageSize 上限 500，10 年约 2500 个交易日，按页翻取直到覆盖 10 年或翻完。
+    func fetchTreasuryYields(years: Int = 10) async throws -> YieldSeries {
+        let cutoff = Calendar(identifier: .gregorian).date(byAdding: .year, value: -years, to: now())
+        var all: [YieldPoint] = []
+        var page = 1
+        var totalPages = Int.max
+        while page <= totalPages {
+            let url = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+                + "?reportName=RPTA_WEB_TREASURYYIELD&columns=SOLAR_DATE,EMM00166466,EMG00001310"
+                + "&sortColumns=SOLAR_DATE&sortTypes=-1&pageSize=3000&pageNumber=\(page)"
+            let data = try await client.get(url)
+            let parsed = try TreasuryYieldParser.parse(data)
+            totalPages = parsed.pages
+            let existing = Set(all.map(\.date))
+            all += parsed.points.filter { !existing.contains($0.date) }
+            // 本页最早已覆盖 cutoff 即停（点是升序，页间也按时间向前推进）
+            if let first = parsed.points.first, let d = DateUtil.date(first.date), let cutoff, d <= cutoff { break }
+            page += 1
+        }
+        guard !all.isEmpty else { throw ParserError.noRows }
+        all.sort { $0.date < $1.date }
+        return YieldSeries(meta: SeriesMeta(source: .eastmoneyYield, fetchedAt: now(), currency: .cny,
+                                            isMonthly: false, isDelayed: false), points: all)
+    }
 }

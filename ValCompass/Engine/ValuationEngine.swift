@@ -191,8 +191,100 @@ enum ValuationEngine {
         return out
     }
 
-    // MARK: 溢折价
+    // MARK: 辅助指标 · 股债性价比（ERP）
 
+    /// ERP = 1/PE × 100 − 10Y 国债收益率（百分数口径，如 5.2 表示 5.2%）。
+    /// 日度：PE 按交易日，收益率周末/假日缺失时用此前最近一个交易日的值填充。
+    /// 返回升序 (date, erp) 序列；任一输入缺失的日子跳过。
+    static func erpSeriesDaily(pe pePoints: [PEPoint], yields: [YieldPoint],
+                               yieldOf keyPath: KeyPath<YieldPoint, Double?>) -> [(date: String, erp: Double)] {
+        // 先构建 日期→收益率 的前向填充序列（收益率序列本身升序）
+        var filled: [(date: String, y: Double)] = []
+        var last: Double?
+        for p in yields {
+            if let y = p[keyPath: keyPath] { last = y }
+            if let last { filled.append((p.date, last)) }
+        }
+        guard !filled.isEmpty else { return [] }
+        var out: [(date: String, erp: Double)] = []
+        var yi = 0
+        for pe in pePoints where pe.pe > 0 {
+            // 推进到不超过 pe.date 的最后一个收益率点（字符串日期同格式可直接比较）
+            while yi + 1 < filled.count && filled[yi + 1].date <= pe.date { yi += 1 }
+            guard filled[yi].date <= pe.date else { continue } // PE 早于首个收益率点
+            out.append((pe.date, 100.0 / pe.pe - filled[yi].y))
+        }
+        return out
+    }
+
+    /// 月度 ERP（spx）：每月 PE 点配对该月最后一个可得收益率（月末口径）。
+    static func erpSeriesMonthly(pe pePoints: [PEPoint], yields: [YieldPoint],
+                                 yieldOf keyPath: KeyPath<YieldPoint, Double?>) -> [(date: String, erp: Double)] {
+        var filled: [(date: String, y: Double)] = []
+        var last: Double?
+        for p in yields {
+            if let y = p[keyPath: keyPath] { last = y }
+            if let last { filled.append((p.date, last)) }
+        }
+        guard !filled.isEmpty else { return [] }
+        var out: [(date: String, erp: Double)] = []
+        var yi = 0
+        for pe in pePoints where pe.pe > 0 {
+            let month = String(pe.date.prefix(7)) // yyyy-MM
+            // 月末：该月内最后一个有值的收益率点；该月无数据则取此前最近一个
+            while yi + 1 < filled.count && String(filled[yi + 1].date.prefix(7)) <= month { yi += 1 }
+            guard String(filled[yi].date.prefix(7)) <= month else { continue }
+            out.append((pe.date, 100.0 / pe.pe - filled[yi].y))
+        }
+        return out
+    }
+
+    /// 由 ERP 序列生成辅助指标：当前 ERP 在近 10 年（不足则全部）序列中的分位。
+    /// 方向：ERP 越高 = 股票相对债券越便宜（与主分数方向相反）。
+    static func erpMetric(erpSeries: [(date: String, erp: Double)]) -> SecondaryMetric? {
+        guard let latest = erpSeries.last, let asOf = DateUtil.date(latest.date) else { return nil }
+        let win = window(erpSeries, asOf: asOf) { DateUtil.date($0.date) }
+        guard let percentile = percentileRank(of: latest.erp, in: win.map(\.erp)) else { return nil }
+        return SecondaryMetric(
+            name: "股债性价比（ERP）",
+            valueText: String(format: "%.2f%%", latest.erp),
+            percentile: percentile,
+            direction: .higherCheaper,
+            asOf: latest.date,
+            note: "ERP = 盈利收益率（1/PE）− 10年期国债收益率；百分位越高，股票相对债券越便宜（与主分数方向相反）。",
+            confidence: .medium)
+    }
+
+    // MARK: 辅助指标 · CAPE / 股息率分位（spx）
+
+    /// 当前值在近 10 年月度序列中的分位，包装为辅助指标。
+    /// - direction: CAPE 越高越贵（与主分数同向）；股息率越高越便宜（相反）。
+    static func percentileMetric(name: String, series: PESeries, unit: String,
+                                 direction: MetricDirection, note: String) -> SecondaryMetric? {
+        guard let latest = series.points.last, let asOf = DateUtil.date(latest.date) else { return nil }
+        let win = window(series.points, asOf: asOf) { DateUtil.date($0.date) }
+        guard let percentile = percentileRank(of: latest.pe, in: win.map(\.pe)) else { return nil }
+        return SecondaryMetric(
+            name: name,
+            valueText: String(format: "%.2f%@", latest.pe, unit),
+            percentile: percentile,
+            direction: direction,
+            asOf: latest.date,
+            note: note,
+            confidence: .medium)
+    }
+
+    // MARK: ETF 评分来源
+
+    /// ETF 评分 = 底层指数评分；无底层且方法为法B（如黄金ETF）时，用自身市价序列跑价格位置。
+    static func etfScore(target: MarketTarget, underlying: ValuationResult?, ownPrice: PriceSeries?) -> ValuationResult? {
+        if let underlying { return underlying }
+        guard target.underlyingTargetID == nil, target.method == .pricePosition,
+              let ownPrice else { return nil }
+        return evaluatePricePosition(priceSeries: ownPrice)
+    }
+
+    // MARK: 溢折价
     /// premium = 市价 / 单位净值 − 1（必须用单位净值，不得用累计净值）
     static func premium(price: Double, unitNav: Double) -> Double? {
         guard unitNav > 0 else { return nil }

@@ -143,6 +143,7 @@ extension DataSourceKind {
         case .csindex: return "中证指数"
         case .eastmoney: return "天天基金"
         case .multpl: return "multpl.com"
+        case .eastmoneyYield: return "东方财富"
         }
     }
 }

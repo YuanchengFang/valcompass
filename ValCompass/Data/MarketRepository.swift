@@ -21,6 +21,7 @@ struct TargetSnapshot: Identifiable, Equatable {
     var freshness: Freshness?
     var premium: Double?               // ETF 溢折价率
     var premiumText: String = ""
+    var secondaryMetrics: [SecondaryMetric] = []  // 其他视角（不并入主分数）
 }
 
 // MARK: - 仓库：缓存优先，后台刷新
@@ -38,8 +39,11 @@ final class MarketRepository {
     private var priceSeries: [String: PriceSeries] = [:]
     private var peSeries: [String: PESeries] = [:]
     private var navSeries: [String: FundNavSeries] = [:]
+    private var treasuryYields: YieldSeries?   // 中/美 10Y 国债收益率（ERP 用）
     /// 底层标的 id -> 评分结果（供 ETF 复用）
     private var underlyingResults: [String: ValuationResult] = [:]
+    /// 标的 id -> 辅助指标（供 ETF 复用底层指数的「其他视角」）
+    private var secondaryByTarget: [String: [SecondaryMetric]] = [:]
 
     init(fetcher: MarketDataFetcher = MarketDataFetcher(client: HTTPClient()), cache: CacheStore = CacheStore()) {
         self.fetcher = fetcher
@@ -60,12 +64,17 @@ final class MarketRepository {
     func priceSeries(for id: String) -> PriceSeries? { priceSeries[id] }
     func peSeries(for id: String) -> PESeries? { peSeries[id] }
     func navSeries(for id: String) -> FundNavSeries? { navSeries[id] }
+    func yieldSeries() -> YieldSeries? { treasuryYields }
+    /// 标普500 Shiller PE / 股息率（月度，仅 spx 详情页溯源用）
+    func spxShillerPE() -> PESeries? { peSeries[CacheStore.spxShillerPEKey()] }
+    func spxDividendYield() -> PESeries? { peSeries[CacheStore.spxDividendYieldKey()] }
 
     /// 全库最近一次抓取时间（取各序列 meta.fetchedAt 的最大值）
     var lastUpdatedAt: Date? {
         var dates = priceSeries.values.map(\.meta.fetchedAt)
         dates += peSeries.values.map(\.meta.fetchedAt)
         dates += navSeries.values.map(\.meta.fetchedAt)
+        if let y = treasuryYields { dates.append(y.meta.fetchedAt) }
         return dates.max()
     }
 
@@ -85,6 +94,14 @@ final class MarketRepository {
                 navSeries[target.id] = s
             }
         }
+        // 辅助数据：国债收益率与标普500 Shiller PE/股息率
+        treasuryYields = cache.load(YieldSeries.self, key: CacheStore.yieldKey())
+        if let s: PESeries = cache.load(PESeries.self, key: CacheStore.spxShillerPEKey()) {
+            peSeries[CacheStore.spxShillerPEKey()] = s
+        }
+        if let s: PESeries = cache.load(PESeries.self, key: CacheStore.spxDividendYieldKey()) {
+            peSeries[CacheStore.spxDividendYieldKey()] = s
+        }
         rebuildSnapshots(fromCache: true)
     }
 
@@ -101,6 +118,8 @@ final class MarketRepository {
             for t in nonETF {
                 group.addTask { await self.refreshIndex(t) }
             }
+            // 辅助数据独立抓取：失败只影响「其他视角」，不拖垮任何标的评分
+            group.addTask { await self.refreshAuxiliaryData() }
         }
         await withTaskGroup(of: Void.self) { group in
             for t in etfs {
@@ -120,8 +139,11 @@ final class MarketRepository {
         case (.cn, .fundamentals):
             do { peS = try await fetcher.fetchCSIndexPE(indexCode: target.csindexCode!) }
             catch { peFailed = true }
-            do { priceS = try await fetcher.fetchTencentDaily(symbol: target.tencentSymbol!, currency: target.currency) }
-            catch { priceFailed = true }
+            // 部分中证指数（如半导体 H30184）腾讯无报价：只取 PE，属预期降级
+            if let symbol = target.tencentSymbol {
+                do { priceS = try await fetcher.fetchTencentDaily(symbol: symbol, currency: target.currency) }
+                catch { priceFailed = true }
+            }
         case (.us, .fundamentals):
             // 标普500：multpl 提供 PE（月度），新浪提供日线点位（走势图用）
             do { peS = try await fetcher.fetchMultplPE() }
@@ -161,6 +183,27 @@ final class MarketRepository {
         } catch {
             markFailed(target.id, error: error)
         }
+    }
+
+    // MARK: 辅助数据（国债收益率 / 标普500 Shiller PE / 股息率）
+
+    /// 只服务「其他视角」；失败静默降级（辅助指标不显示），保留缓存。
+    private func refreshAuxiliaryData() async {
+        do {
+            let yields = try await fetcher.fetchTreasuryYields()
+            treasuryYields = yields
+            cache.save(yields, key: CacheStore.yieldKey())
+        } catch { /* 辅助源失败：沿用缓存或隐藏辅助指标 */ }
+        do {
+            let shiller = try await fetcher.fetchMultplPE(shiller: true)
+            peSeries[CacheStore.spxShillerPEKey()] = shiller
+            cache.save(shiller, key: CacheStore.spxShillerPEKey())
+        } catch { }
+        do {
+            let div = try await fetcher.fetchMultplDividendYield()
+            peSeries[CacheStore.spxDividendYieldKey()] = div
+            cache.save(div, key: CacheStore.spxDividendYieldKey())
+        } catch { }
     }
 
     // MARK: 状态更新（主线程）
@@ -273,12 +316,56 @@ final class MarketRepository {
         snap.freshness = freshness
         // 记录评分供 ETF 复用（ETF 评分 = 底层指数评分）
         underlyingResults[target.id] = result
+        // 其他视角：辅助指标（不并入主分数）
+        snap.secondaryMetrics = buildSecondaryMetrics(for: target)
+        secondaryByTarget[target.id] = snap.secondaryMetrics
+    }
+
+    /// 辅助估值指标：法A 标的给 ERP；spx 追加 CAPE 与股息率分位；法B 标的无。
+    private func buildSecondaryMetrics(for target: MarketTarget) -> [SecondaryMetric] {
+        guard target.method == .fundamentals else { return [] }
+        var metrics: [SecondaryMetric] = []
+        switch target.market {
+        case .cn:
+            if let peS = peSeries[target.id], let yields = treasuryYields {
+                let erp = ValuationEngine.erpSeriesDaily(pe: peS.points, yields: yields.points, yieldOf: \.cn10y)
+                if let m = ValuationEngine.erpMetric(erpSeries: erp) { metrics.append(m) }
+            }
+        case .us:
+            // 标普500：ERP（月度 PE × 月末美债 10Y）+ Shiller CAPE 分位 + 股息率分位
+            if let peS = peSeries[target.id], let yields = treasuryYields {
+                let erp = ValuationEngine.erpSeriesMonthly(pe: peS.points, yields: yields.points, yieldOf: \.us10y)
+                if let m = ValuationEngine.erpMetric(erpSeries: erp) { metrics.append(m) }
+            }
+            if let shiller = peSeries[CacheStore.spxShillerPEKey()],
+               let m = ValuationEngine.percentileMetric(
+                    name: "Shiller CAPE 分位", series: shiller, unit: "",
+                    direction: .higherExpensive,
+                    note: "CAPE 用 10 年均通胀调整盈利平滑周期；月度数据。分位越高越贵（与主分数同向）。") {
+                metrics.append(m)
+            }
+            if let div = peSeries[CacheStore.spxDividendYieldKey()],
+               let m = ValuationEngine.percentileMetric(
+                    name: "股息率分位", series: div, unit: "%",
+                    direction: .higherCheaper,
+                    note: "标普500 股息率（月度）。分位越高越便宜（与主分数方向相反）。") {
+                metrics.append(m)
+            }
+        case .hk:
+            break
+        }
+        return metrics
     }
 
     private func buildETFSnapshot(target: MarketTarget, snap: inout TargetSnapshot, now: Date) {
-        // 评分 = 底层指数评分
+        // 评分 = 底层指数评分；无底层且法B（黄金ETF）时用自身市价跑价格位置
+        snap.result = ValuationEngine.etfScore(
+            target: target,
+            underlying: target.underlyingTargetID.flatMap { underlyingResults[$0] },
+            ownPrice: priceSeries[target.id])
+        // 其他视角：跟随底层指数的辅助指标
         if let underlyingID = target.underlyingTargetID {
-            snap.result = underlyingResults[underlyingID]
+            snap.secondaryMetrics = secondaryByTarget[underlyingID] ?? []
         }
         // 溢折价 = 最新市价 / 最新单位净值 − 1（单位净值，非累计净值）
         if let priceS = priceSeries[target.id], let lastBar = priceS.bars.last {

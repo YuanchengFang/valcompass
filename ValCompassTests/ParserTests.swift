@@ -99,4 +99,45 @@ final class ParserTests: XCTestCase {
         XCTAssertGreaterThan(points.count, 1000)
         XCTAssertEqual(points.first?.date, "1871-02-01")
     }
+
+    // multpl 标普500 股息率（结构与 PE 表相同，值带 % 号；日期为月末）
+    // 注意：页面顶部除了当月正式行还有一个当日估计行（†），翻转后估计行在最后，
+    // 因此序列大体升序但当月有两行——与 PE 表现状一致，消费方取 last 即最新值。
+    func testMultplDividendYield() throws {
+        let points = try MultplParser.parse(try Fixtures.data("multpl_spx_dividend_yield.html"))
+        XCTAssertGreaterThan(points.count, 1000)
+        XCTAssertEqual(points.first?.date, "1871-01-31")
+        XCTAssertEqual(points.first?.pe ?? 0, 5.86, accuracy: 1e-6) // 值字段即股息率百分数
+        XCTAssertEqual(points.last?.date, "2026-07-29")
+        XCTAssertEqual(points.last?.pe ?? 0, 1.10, accuracy: 1e-6)  // % 号已剥离
+        // 历史锚点：2020-04 疫情期股息率冲高
+        let apr2020 = points.first { $0.date == "2020-04-30" }
+        XCTAssertEqual(apr2020?.pe ?? 0, 2.16, accuracy: 1e-6)
+    }
+
+    // 东方财富 10 年期国债收益率（字段锚点已用历史值验证）
+    func testTreasuryYield() throws {
+        let page = try TreasuryYieldParser.parse(try Fixtures.data("eastmoney_treasury_yield.json"))
+        XCTAssertEqual(page.points.count, 4000) // fixture 合并了第 1–8 页真实数据
+        XCTAssertGreaterThan(page.pages, 1)     // 服务端 pageSize 上限 500，必须翻页
+        // 升序
+        XCTAssertEqual(page.points.map(\.date), page.points.map(\.date).sorted())
+        // 历史锚点：EMM00166466=中国10Y、EMG00001310=美国10Y
+        let jan2018 = page.points.first { $0.date == "2018-01-02" }
+        XCTAssertEqual(jan2018?.cn10y ?? 0, 3.9, accuracy: 0.15)
+        let apr2020 = page.points.first { $0.date == "2020-04-01" }
+        XCTAssertEqual(apr2020?.cn10y ?? 0, 2.51, accuracy: 0.1)
+        XCTAssertEqual(apr2020?.us10y ?? 0, 0.75, accuracy: 0.2)
+        let dec2024 = page.points.first { $0.date == "2024-12-02" }
+        XCTAssertEqual(dec2024?.cn10y ?? 0, 1.98, accuracy: 0.15)
+        XCTAssertEqual(dec2024?.us10y ?? 0, 4.55, accuracy: 0.4)
+        // 美国收益率允许为 null（美方假日/发布滞后），解析不得丢行
+        XCTAssertTrue(page.points.contains { $0.us10y == nil && $0.cn10y != nil })
+    }
+
+    func testTreasuryYieldBadResponse() {
+        XCTAssertThrowsError(try TreasuryYieldParser.parse(Data("{}".utf8)))
+        XCTAssertThrowsError(try TreasuryYieldParser.parse(
+            Data(#"{"success":true,"result":{"pages":1,"data":[]}}"#.utf8)))
+    }
 }

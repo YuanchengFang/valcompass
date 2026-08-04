@@ -21,6 +21,7 @@ struct TargetDetailView: View {
                     banner
                 }
                 valuationCard
+                secondaryMetricsCard
                 if target.kind == .etf {
                     premiumCard
                 }
@@ -169,6 +170,55 @@ struct TargetDetailView: View {
         }
     }
 
+    // MARK: 其他视角（辅助指标：ERP / CAPE / 股息率，不并入主分数）
+
+    @ViewBuilder
+    private var secondaryMetricsCard: some View {
+        if let metrics = snapshot?.secondaryMetrics, !metrics.isEmpty {
+            Card(spacing: 13) {
+                HStack(alignment: .firstTextBaseline) {
+                    Eyebrow("其他视角")
+                    Spacer()
+                    Text("不并入主分数")
+                        .font(AppFont.footnote)
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                ForEach(Array(metrics.enumerated()), id: \.offset) { index, metric in
+                    if index > 0 { CardDivider() }
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(metric.name)
+                                .font(AppFont.body)
+                                .foregroundStyle(Theme.textPrimary)
+                            Spacer()
+                            Text(metric.valueText)
+                                .font(AppFont.serifNumber(19))
+                                .foregroundStyle(Theme.textPrimary)
+                        }
+                        HStack(spacing: 6) {
+                            Text("分位 \(Int(metric.percentile.rounded())) / 100")
+                                .foregroundStyle(Theme.textSecondary)
+                            Text("·")
+                                .foregroundStyle(Theme.textTertiary)
+                            Text("百分位\(metric.direction.rawValue)")
+                                .foregroundStyle(metric.direction == .higherCheaper
+                                                 ? Theme.zone(.low) : Theme.zone(.high))
+                            Spacer()
+                            Text("截至 \(metric.asOf)")
+                                .foregroundStyle(Theme.textTertiary)
+                        }
+                        .font(AppFont.footnote)
+                        Text(metric.note)
+                            .font(AppFont.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Disclaimer("辅助指标从不同角度观察估值，方向可能与主分数相反（如 ERP、股息率是分位越高越便宜）；均不构成买卖信号。")
+            }
+        }
+    }
+
     // MARK: 溢折价（ETF 独立成卡：与底层估值是两个维度）
 
     @ViewBuilder
@@ -223,31 +273,43 @@ struct TargetDetailView: View {
 
     // MARK: 数据溯源
 
+    /// 逐条收集数据源记录（辅助数据源只在有辅助指标时出现），卡片内统一渲染
+    private var provenanceRows: [(title: String, meta: SeriesMeta, asOf: String?)] {
+        var rows: [(title: String, meta: SeriesMeta, asOf: String?)] = []
+        if let priceS = repository.priceSeries(for: target.id) {
+            rows.append((target.kind == .etf ? "市价（日线）" : "点位（日线）", priceS.meta, priceS.asOfDate))
+        }
+        if let peS = repository.peSeries(for: target.underlyingTargetID ?? target.id) {
+            rows.append(("市盈率（PE）", peS.meta, peS.asOfDate))
+        }
+        if let navS = repository.navSeries(for: target.id) {
+            rows.append(("基金单位净值", navS.meta, navS.asOfDate))
+        }
+        let metrics = snapshot?.secondaryMetrics ?? []
+        if metrics.contains(where: { $0.name.contains("ERP") }), let yields = repository.yieldSeries() {
+            let which = target.market == .us || target.underlyingTargetID == "spx" ? "美国" : "中国"
+            rows.append(("10年期国债收益率（\(which)）", yields.meta, yields.asOfDate))
+        }
+        if metrics.contains(where: { $0.name.contains("CAPE") }), let shiller = repository.spxShillerPE() {
+            rows.append(("Shiller PE", shiller.meta, shiller.asOfDate))
+        }
+        if metrics.contains(where: { $0.name.contains("股息率") }), let div = repository.spxDividendYield() {
+            rows.append(("标普500 股息率", div.meta, div.asOfDate))
+        }
+        return rows
+    }
+
     private var provenanceCard: some View {
         Card {
             CardTitle("数据溯源")
-            let priceS = repository.priceSeries(for: target.id)
-            let peS = repository.peSeries(for: target.underlyingTargetID ?? target.id)
-            let navS = repository.navSeries(for: target.id)
-
-            if priceS == nil, peS == nil, navS == nil {
+            let rows = provenanceRows
+            if rows.isEmpty {
                 ContentNote(text: "暂无已抓取的数据源记录。")
             } else {
                 VStack(spacing: 0) {
-                    if let priceS {
-                        provenanceRow(title: target.kind == .etf ? "市价（日线）" : "点位（日线）",
-                                      meta: priceS.meta, asOf: priceS.asOfDate,
-                                      isLast: peS == nil && navS == nil)
-                    }
-                    if let peS {
-                        provenanceRow(title: "市盈率（PE）",
-                                      meta: peS.meta, asOf: peS.asOfDate,
-                                      isLast: navS == nil)
-                    }
-                    if let navS {
-                        provenanceRow(title: "基金单位净值",
-                                      meta: navS.meta, asOf: navS.asOfDate,
-                                      isLast: true)
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        provenanceRow(title: row.title, meta: row.meta, asOf: row.asOf,
+                                      isLast: index == rows.count - 1)
                     }
                 }
             }
