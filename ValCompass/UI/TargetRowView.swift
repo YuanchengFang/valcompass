@@ -9,12 +9,13 @@ struct TargetRowView: View {
 
     private var isLoading: Bool { snapshot.status == .loading }
 
-    // 右侧评分区固定尺寸：刻度 50 + 档位名 43 + 分数 25 + 两个 5pt 间距 = 128。
+    // 右侧评分区固定尺寸：刻度 50 + 档位名 43 + 分数 36 + 两个 5pt 间距 = 139。
     // 定宽是为了让 20 行的指针与分数对齐成一列；同时尽量给左侧日期留出余量，
     // 否则 ETF 的「市价 X | 净值 Y」会被截断。
+    // 分数宽度按三位数上限「100」设定（20pt 衬线等宽数字实测约 35.5pt），避免折行。
     private let trackWidth: CGFloat = 50
     private let zoneLabelWidth: CGFloat = 43
-    private let scoreWidth: CGFloat = 25
+    private let scoreWidth: CGFloat = 36
 
     var body: some View {
         HStack(spacing: Spacing.s) {
@@ -104,6 +105,7 @@ struct TargetRowView: View {
                 Text("\(Int(score.rounded()))")
                     .font(AppFont.scoreRow)
                     .foregroundStyle(Theme.zone(zone))
+                    .lineLimit(1)
                     .frame(width: scoreWidth, alignment: .trailing)
             }
             .accessibilityElement(children: .ignore)
