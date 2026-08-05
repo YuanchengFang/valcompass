@@ -2,7 +2,10 @@ import Foundation
 
 // MARK: - 估值引擎（纯函数，可复现）
 
-enum ValuationZone: String, CaseIterable {
+// 分档、置信度、新鲜度都要随「列表摘要缓存」落盘，因此一律 Codable + Sendable。
+// 原始值即中文档名，缓存文件因此可直接肉眼核对。
+
+enum ValuationZone: String, CaseIterable, Codable, Sendable {
     case veryLow = "明显偏低"   // 0–20 便宜
     case low = "偏低"           // 20–40
     case fair = "合理"          // 40–60
@@ -10,7 +13,7 @@ enum ValuationZone: String, CaseIterable {
     case veryHigh = "明显偏高"  // 80–100 昂贵
 }
 
-enum Confidence: String, Comparable {
+enum Confidence: String, Comparable, Codable, Sendable {
     case low = "低"
     case medium = "中"
     case high = "高"
@@ -24,12 +27,12 @@ enum PremiumTier: String {
     case significant = "显著"     // >1%
 }
 
-enum Freshness: String {
+enum Freshness: String, Codable, Sendable {
     case fresh = "最新"
     case stale = "已过期"
 }
 
-struct ValuationResult: Equatable {
+struct ValuationResult: Equatable, Codable, Sendable {
     var score: Double?           // 0–100 百分位；nil 表示数据不足
     var zone: ValuationZone?
     var method: ValuationMethod

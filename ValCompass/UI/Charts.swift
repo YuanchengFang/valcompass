@@ -369,17 +369,15 @@ struct ScoreHistoryChartView: View {
                 readoutRow
                 chart
                 Disclaimer(captionText)
-            } else if history != nil {
+            } else if history != nil, repository.hasLoadedSeries {
+                // 只有序列确实读完了、算出来还是空，才能说「数据不足」。
+                // 少了 hasLoadedSeries 这个条件，读盘那几百毫秒里 compute() 拿到
+                // 空序列会把 history 置成 []，于是断言一件随后就被推翻的事。
                 ContentNote(text: "历史数据不足，无法绘制评分曲线。")
             } else {
-                HStack(spacing: Spacing.s) {
-                    ProgressView().controlSize(.small)
-                    Text("正在后台计算历史评分…")
-                        .font(AppFont.caption)
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, Spacing.l)
+                LoadingNote(text: repository.hasLoadedSeries ? "正在后台计算历史评分…" : "正在读取历史数据…")
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, Spacing.l)
             }
         }
         .task(id: "\(dataToken)|\(effectiveRange.rawValue)") {

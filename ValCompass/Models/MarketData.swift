@@ -91,7 +91,7 @@ enum MetricDirection: String, Codable, Equatable {
 }
 
 /// 一条辅助估值指标：名称/当前值/百分位/方向/数据截至/一句方法说明
-struct SecondaryMetric: Equatable {
+struct SecondaryMetric: Equatable, Sendable {
     var name: String
     var valueText: String          // 当前值展示文本，如 "5.20%"
     var percentile: Double         // 0–100，近 10 年（不足则全部）序列中的分位
@@ -110,6 +110,14 @@ enum DateUtil {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(identifier: "Asia/Shanghai")
         f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// 「抓取于 07-28 15:04」展示用。与 `ymd` 同理：创建后只读，可跨线程共享。
+    static let monthDayTime: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "MM-dd HH:mm"
         return f
     }()
 

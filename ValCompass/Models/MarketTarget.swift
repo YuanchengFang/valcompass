@@ -2,17 +2,18 @@ import Foundation
 
 // MARK: - 标的定义
 
-enum AssetKind {
+enum AssetKind: Sendable {
     case index
     case etf
 }
 
-enum ValuationMethod {
+/// 原始值随「列表摘要缓存」落盘（`ValuationResult.method`），改名等于让旧缓存失效
+enum ValuationMethod: String, Codable, Sendable {
     case fundamentals   // 法A：基本面（PE）分位
     case pricePosition  // 法B：价格位置分位
 }
 
-enum Market {
+enum Market: Sendable {
     case cn, hk, us
 }
 
