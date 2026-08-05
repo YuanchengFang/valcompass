@@ -46,32 +46,53 @@ struct ContentView: View {
         return counts
     }
 
+    #if DEBUG
+    /// 调试：-debugDetail <targetID> 以该标的详情页为根（用于模拟器截图验证）
+    private static var debugTarget: MarketTarget? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "-debugDetail"), args.indices.contains(i + 1) else { return nil }
+        return TargetCatalog.target(id: args[i + 1])
+    }
+    #endif
+
     var body: some View {
         NavigationStack {
-            Group {
-                if isEmptyState {
-                    VStack(spacing: 0) {
-                        brandHeader
-                            .padding(.horizontal, Spacing.m + Spacing.xs)
-                            .padding(.top, Spacing.s)
-                        emptyState
-                    }
-                } else {
-                    overview
-                }
-            }
-            .background(Theme.background)
-            // 品牌标题由内容自行绘制（衬线大标题 + 副标题），因此隐藏系统导航栏，
-            // 既统一了字体，也省下大标题区约 60pt 的空白。
-            .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showInfo) {
-                MethodologyView()
-            }
-            .navigationDestination(for: MarketTarget.self) { target in
+            #if DEBUG
+            if let target = Self.debugTarget {
                 TargetDetailView(target: target)
+            } else {
+                rootContent
             }
+            #else
+            rootContent
+            #endif
         }
         .tint(Theme.accent)
+    }
+
+    private var rootContent: some View {
+        Group {
+            if isEmptyState {
+                VStack(spacing: 0) {
+                    brandHeader
+                        .padding(.horizontal, Spacing.m + Spacing.xs)
+                        .padding(.top, Spacing.s)
+                    emptyState
+                }
+            } else {
+                overview
+            }
+        }
+        .background(Theme.background)
+        // 品牌标题由内容自行绘制（衬线大标题 + 副标题），因此隐藏系统导航栏，
+        // 既统一了字体，也省下大标题区约 60pt 的空白。
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: $showInfo) {
+            MethodologyView()
+        }
+        .navigationDestination(for: MarketTarget.self) { target in
+            TargetDetailView(target: target)
+        }
     }
 
     // MARK: 品牌头部

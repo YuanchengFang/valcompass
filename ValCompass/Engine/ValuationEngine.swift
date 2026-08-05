@@ -160,17 +160,26 @@ enum ValuationEngine {
 
     /// 评分历史（法A）：对 PE 序列自适应采样，逐点以显式 asOf 重算评分。
     /// 纯函数、无状态，可在后台线程调用。早期采样点历史窗口短，评分波动大属正常。
-    static func scoreHistory(peSeries: PESeries, maxSamples: Int = 120) -> [ScoreHistoryPoint] {
-        sample(dates: peSeries.points.map(\.date), maxSamples: maxSamples) { asOf in
+    /// since：只采样该日期之后的点（评估仍基于全量序列，分数不变）——
+    /// 供 UI 按选定窗口获得足够采样密度（否则 120 点摊在百年历史上，短窗口只剩几个点）。
+    static func scoreHistory(peSeries: PESeries, maxSamples: Int = 120, since: Date? = nil) -> [ScoreHistoryPoint] {
+        sample(dates: dates(peSeries.points.map(\.date), since: since), maxSamples: maxSamples) { asOf in
             evaluateFundamentals(peSeries: peSeries, asOf: asOf)
         }
     }
 
     /// 评分历史（法B）：对收盘价序列自适应采样，逐点以显式 asOf 重算评分。
-    static func scoreHistory(priceSeries: PriceSeries, maxSamples: Int = 120) -> [ScoreHistoryPoint] {
-        sample(dates: priceSeries.bars.map(\.date), maxSamples: maxSamples) { asOf in
+    /// since 语义同上。
+    static func scoreHistory(priceSeries: PriceSeries, maxSamples: Int = 120, since: Date? = nil) -> [ScoreHistoryPoint] {
+        sample(dates: dates(priceSeries.bars.map(\.date), since: since), maxSamples: maxSamples) { asOf in
             evaluatePricePosition(priceSeries: priceSeries, asOf: asOf)
         }
+    }
+
+    /// 按 since 过滤采样日期（nil 时原样返回）
+    private static func dates(_ all: [String], since: Date?) -> [String] {
+        guard let since else { return all }
+        return all.filter { DateUtil.date($0).map { $0 >= since } ?? false }
     }
 
     /// 按自适应步长采样（上限 maxSamples 个点），并始终包含序列末点。

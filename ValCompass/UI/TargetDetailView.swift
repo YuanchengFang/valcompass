@@ -13,26 +13,39 @@ struct TargetDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Spacing.m) {
-                header
-                    .padding(.bottom, Spacing.xs)
-                if let snap = snapshot, let banner = statusBanner(for: snap) {
-                    banner
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: Spacing.m) {
+                    header
+                        .padding(.bottom, Spacing.xs)
+                    if let snap = snapshot, let banner = statusBanner(for: snap) {
+                        banner
+                    }
+                    valuationCard
+                    secondaryMetricsCard
+                    if target.kind == .etf {
+                        premiumCard
+                    }
+                    priceSection
+                    ScoreHistoryChartView(target: target)
+                        .id("scoreChart")
+                    provenanceCard
+                    rationaleCard
                 }
-                valuationCard
-                secondaryMetricsCard
-                if target.kind == .etf {
-                    premiumCard
-                }
-                priceSection
-                ScoreHistoryChartView(target: target)
-                provenanceCard
-                rationaleCard
+                .padding(.horizontal, Spacing.m)
+                .padding(.top, Spacing.s)
+                .padding(.bottom, Spacing.xl)
             }
-            .padding(.horizontal, Spacing.m)
-            .padding(.top, Spacing.s)
-            .padding(.bottom, Spacing.xl)
+            #if DEBUG
+            // 调试：-debugCharts 滚动到估值变化图，便于截图验证
+            .onAppear {
+                if ProcessInfo.processInfo.arguments.contains("-debugCharts") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        proxy.scrollTo("scoreChart", anchor: .top)
+                    }
+                }
+            }
+            #endif
         }
         .background(Theme.background)
         #if DEBUG
