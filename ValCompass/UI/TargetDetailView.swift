@@ -276,6 +276,13 @@ struct TargetDetailView: View {
             PriceChartView(target: target,
                            priceSeries: priceS,
                            navSeries: repository.navSeries(for: target.id))
+        } else if !repository.hasLoadedSeries {
+            // 序列还在后台读盘（列表由摘要缓存点亮，因此这里可能比数据先到）。
+            // 此时不能说「暂无数据」——那是一句几百毫秒后就被推翻的话。
+            Card {
+                CardTitle(target.kind == .etf ? "市价走势" : "点位走势")
+                LoadingNote(text: "正在读取历史数据…")
+            }
         } else {
             Card {
                 CardTitle(target.kind == .etf ? "市价走势" : "点位走势")
@@ -316,7 +323,9 @@ struct TargetDetailView: View {
         Card {
             CardTitle("数据溯源")
             let rows = provenanceRows
-            if rows.isEmpty {
+            if rows.isEmpty, !repository.hasLoadedSeries {
+                LoadingNote(text: "正在读取数据源记录…")
+            } else if rows.isEmpty {
                 ContentNote(text: "暂无已抓取的数据源记录。")
             } else {
                 VStack(spacing: 0) {

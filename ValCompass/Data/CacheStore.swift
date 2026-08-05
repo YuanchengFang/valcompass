@@ -7,6 +7,11 @@ import Foundation
 final class CacheStore: Sendable {
     private let directory: URL
 
+    /// 写盘串行化。同一 key 的两次写入若并发发出，落盘先后是没有保证的，
+    /// 旧数据可能后到并胜出——`.atomic` 只保证不会留下半个文件，不保证顺序。
+    /// 所有异步写入收敛到这一条队列，因此「后发起的一定后落盘」。
+    private let writeQueue = DispatchQueue(label: "app.valcompass.cache-write", qos: .utility)
+
     init(directory: URL? = nil) {
         if let directory {
             self.directory = directory
@@ -26,6 +31,11 @@ final class CacheStore: Sendable {
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(value) else { return }
         try? data.write(to: fileURL(key: key), options: .atomic)
+    }
+
+    /// 异步写盘：保序，调用方不等待。编码也在队列上做，主线程只让出一个值。
+    func saveAsync<T: Encodable & Sendable>(_ value: T, key: String) {
+        writeQueue.async { self.save(value, key: key) }
     }
 
     func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
@@ -66,11 +76,19 @@ final class CacheStore: Sendable {
     // MARK: 列表摘要（启动首帧用）
 
     func saveSummary(_ summaries: [SnapshotSummary]) {
-        save(summaries, key: Self.summaryKey())
+        save(SummaryFile(version: SummaryFile.currentVersion, items: summaries), key: Self.summaryKey())
     }
 
+    func saveSummaryAsync(_ summaries: [SnapshotSummary]) {
+        saveAsync(SummaryFile(version: SummaryFile.currentVersion, items: summaries), key: Self.summaryKey())
+    }
+
+    /// 版本不符一律当作没有缓存（丢弃重建），不做兼容解码：
+    /// 摘要是可再生的派生数据，为它维护多版本解码路径不划算。
     func loadSummary() -> [SnapshotSummary]? {
-        load([SnapshotSummary].self, key: Self.summaryKey())
+        guard let file = load(SummaryFile.self, key: Self.summaryKey()),
+              file.version == SummaryFile.currentVersion else { return nil }
+        return file.items
     }
 
     // 缓存键约定

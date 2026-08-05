@@ -26,6 +26,8 @@ struct TargetSnapshot: Identifiable, Equatable, Sendable {
     // 数据溯源（不直接展示，用于重算新鲜度与「抓取于 X」文案）。
     // 摘要缓存只落盘这三项，状态与新鲜度一律按当下时间重算，
     // 否则昨天存下的「最新」明天读出来还是「最新」，等于静默沿用过期数据。
+    // 注意 quoteAsOf 只在「该标的的过期判定要看行情」时才填：法A 指数有 PE 时走
+    // fundamentalAsOf，这里就是 nil——nil 不代表它没有行情数据，只代表行情不参与判定。
     var quoteAsOf: String?             // 行情/市价数据日期（按交易日判过期）
     var fundamentalAsOf: String?       // PE/净值数据日期（按自然日判过期）
     var fetchedAt: Date?               // 原始数据抓取时间
@@ -55,6 +57,9 @@ struct SnapshotContext: Sendable {
 /// 有意不落盘的两项：
 /// - status / freshness：与「当前时间」相关，必须按 asOf 日期在恢复时重算。
 /// - secondaryMetrics：依赖完整序列，后台把序列读完会自然补上。
+///
+/// 这里只放定长小字段。往里加数组或长文本会把「同步解码几 KB」变回主线程重活，
+/// 首帧白屏就悄悄回来了——加字段前先确认整份仍在几十 KB 量级。
 struct SnapshotSummary: Codable, Sendable {
     var id: String
     var result: ValuationResult?
@@ -94,6 +99,18 @@ struct SnapshotSummary: Codable, Sendable {
     }
 }
 
+/// 摘要缓存文件：内容外面包一层格式版本号。
+///
+/// 必须有版本号，因为 `ValuationZone`/`Confidence` 的 rawValue 直接就是中文展示文案，
+/// 改一次档位措辞旧文件就解不出来；而这里是把 `[SnapshotSummary]` 整份解码，
+/// 任何一条失败都会让整个文件作废——首帧又变回白屏，且没有任何信号提示为什么。
+/// 改 `SnapshotSummary` 的字段、或改它引用到的任何 rawValue 时，把 `currentVersion` +1。
+struct SummaryFile: Codable, Sendable {
+    static let currentVersion = 1
+    var version: Int
+    var items: [SnapshotSummary]
+}
+
 // MARK: - 仓库：缓存优先，后台刷新
 
 @Observable
@@ -101,6 +118,11 @@ struct SnapshotSummary: Codable, Sendable {
 final class MarketRepository {
     private(set) var snapshots: [TargetSnapshot]
     private(set) var isRefreshing = false
+
+    /// 原始序列是否已从缓存读完。详情页据此区分「还在读盘」与「确实没有历史数据」——
+    /// 摘要缓存让列表首帧就可点，读盘那 0.6s 里进详情页会看到空序列，
+    /// 若直接显示「暂无历史数据」，那是一句 0.6s 后就被自己推翻的假陈述。
+    private(set) var hasLoadedSeries = false
 
     private let fetcher: MarketDataFetcher
     private let cache: CacheStore
@@ -128,12 +150,28 @@ final class MarketRepository {
         // 启动即置刷新中：首次安装时后台读缓存会把全部标的判成「暂无数据」，
         // 若此刻 isRefreshing 还是 false，空态（无网络提示）会在联网刷新开始前闪一下。
         isRefreshing = true
-        Task { await loadSeriesThenRefresh() }
+        enqueue { [self] in
+            await loadAllFromCache()
+            await performRefresh()
+        }
     }
 
-    private func loadSeriesThenRefresh() async {
-        await loadAllFromCache()
-        await refreshAll()
+    /// 唯一在飞的数据任务。读缓存与刷新都会整份改写 series/context/snapshots，
+    /// 因此必须串行：`loadAllFromCache` 读盘时主 actor 是空的（这正是它的目的），
+    /// 若刷新在这个窗口里并发写入，缓存恢复时会把刚抓到的数据整份盖回旧值，
+    /// 连带把旧摘要落盘。串起来之后每一份改写都看到完整的前一份结果。
+    private var inFlight: Task<Void, Never>?
+
+    /// 把 work 排到当前在飞任务之后，返回可等待的句柄。
+    @discardableResult
+    private func enqueue(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let previous = inFlight
+        let task = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+        inFlight = task
+        return task
     }
 
     // MARK: 详情页只读访问（原始序列）
@@ -165,16 +203,19 @@ final class MarketRepository {
     private func restoreFromSummary() {
         guard let summaries = cache.loadSummary() else { return }
         let now = Date()
+        var restored: [String: TargetSnapshot] = [:]
         for summary in summaries {
             guard let target = TargetCatalog.target(id: summary.id) else { continue }
             var snap = summary.snapshot()
             Self.applyFreshness(to: &snap, kind: target.kind, now: now)
             Self.applyCacheStatus(to: &snap, fromCache: true)
-            update(summary.id) { $0 = snap }
+            restored[summary.id] = snap
         }
+        // 摘要里没有的标的（新加入目录、或上次没算出结果）保持初始的 .loading
+        snapshots = TargetCatalog.all.map { restored[$0.id] ?? TargetSnapshot(id: $0.id) }
     }
 
-    /// 后台读全部原始序列并整批重算快照，算完一次性回主线程赋值。
+    /// 后台读全部原始序列并整批重算快照，算完回主线程整份赋值。
     private func loadAllFromCache() async {
         let cache = self.cache
         let now = Date()
@@ -184,15 +225,25 @@ final class MarketRepository {
         }.value
         series = loaded.0
         context = loaded.1.context
-        for snap in loaded.1.snapshots {
-            update(snap.id) { $0 = snap }
-        }
+        // 整份赋值而非逐条 update：逐条会触发 37 次观察失效，也会让列表在
+        // 「半批新半批旧」的中间态上渲染一帧。按目录顺序重排以保持既有次序
+        // （buildAllSnapshots 是先指数后 ETF，不是目录序）。
+        let byID = Dictionary(uniqueKeysWithValues: loaded.1.snapshots.map { ($0.id, $0) })
+        snapshots = TargetCatalog.all.map { byID[$0.id] ?? TargetSnapshot(id: $0.id) }
+        hasLoadedSeries = true
         saveSummary()
     }
 
     // MARK: 刷新
 
+    /// 下拉刷新 / 空态重试入口。排在启动链之后而不是与之并发——理由见 `inFlight`。
+    /// 启动窗口内触发时，调用方会一直等到「读完缓存 + 那次刷新」都结束，
+    /// 转圈因此不会提前收（也就不会谎报刷新已完成）。
     func refreshAll() async {
+        await enqueue { [self] in await performRefresh() }.value
+    }
+
+    private func performRefresh() async {
         isRefreshing = true
         defer { isRefreshing = false }
         let targets = TargetCatalog.all
@@ -307,17 +358,15 @@ final class MarketRepository {
     }
 
     /// 落盘一律走后台：单条五千点序列编码加写盘约 5–10ms，37 个标的叠在主线程上会卡出顿挫。
+    /// 走 `CacheStore` 内部的串行队列，同一 key 的写入因此不会乱序（旧数据后到胜出）。
     /// 缓存是尽力而为的，进程结束时没写完的那几条下次刷新会补上。
     private func persist<T: Encodable & Sendable>(_ value: T, key: String) {
-        let cache = self.cache
-        Task.detached(priority: .utility) { cache.save(value, key: key) }
+        cache.saveAsync(value, key: key)
     }
 
     /// 摘要缓存：整份重写（几 KB），缓存重算后与刷新收尾各存一次。
     private func saveSummary() {
-        let summaries = snapshots.map(SnapshotSummary.init)
-        let cache = self.cache
-        Task.detached(priority: .utility) { cache.saveSummary(summaries) }
+        cache.saveSummaryAsync(snapshots.map(SnapshotSummary.init))
     }
 
     // (类整体 @MainActor)
@@ -543,9 +592,7 @@ final class MarketRepository {
 
     nonisolated static func formatTime(_ fetchedAt: Date?) -> String {
         guard let fetchedAt else { return "未知时间" }
-        let f = DateFormatter()
-        f.dateFormat = "MM-dd HH:mm"
-        return f.string(from: fetchedAt)
+        return DateUtil.monthDayTime.string(from: fetchedAt)
     }
 
     private func update(_ id: String, _ mutate: (inout TargetSnapshot) -> Void) {

@@ -113,6 +113,14 @@ enum DateUtil {
         return f
     }()
 
+    /// 「抓取于 07-28 15:04」展示用。与 `ymd` 同理：创建后只读，可跨线程共享。
+    static let monthDayTime: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "MM-dd HH:mm"
+        return f
+    }()
+
     /// 解析缓存：评分历史采样会对同一批日期字符串反复解析，
     /// DateFormatter 解析成本高，用线程安全的 NSCache 去重（语义不变）。
     private static let dateCache = NSCache<NSString, NSDate>()

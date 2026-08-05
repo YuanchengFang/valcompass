@@ -105,6 +105,20 @@ struct ContentNote: View {
     }
 }
 
+/// 加载中说明：与 `ContentNote` 同一视觉层级，但明确表示「还没到」而不是「没有」。
+/// 两者必须区分：把加载态写成空态等于陈述一件几百毫秒后会被推翻的事。
+struct LoadingNote: View {
+    let text: String
+    var body: some View {
+        HStack(spacing: Spacing.s) {
+            ProgressView().controlSize(.small)
+            Text(text)
+                .font(AppFont.caption)
+                .foregroundStyle(Theme.textTertiary)
+        }
+    }
+}
+
 /// 免责/局限说明：比正文更轻，带左侧细线以示注解性质
 struct Disclaimer: View {
     let text: String
@@ -258,8 +272,8 @@ struct SegmentedSelector<T: Hashable & Identifiable>: View {
                     Text(title(option))
                         .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                         .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textSecondary)
-                        // 高度取 38pt：连同外层 2.5pt padding 后整条约 43pt，
-                        // 贴近 44pt 触达标准，又不让选择器在图表上方显得笨重。
+                        // 38pt 底 + 上下各 2.5pt = 命中区 43pt，贴近 44pt 触达标准，
+                        // 又不让选择器在图表上方显得笨重。
                         .frame(maxWidth: .infinity, minHeight: 38)
                         .background {
                             if isSelected {
@@ -268,6 +282,9 @@ struct SegmentedSelector<T: Hashable & Identifiable>: View {
                                     .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
                             }
                         }
+                        // 这 2.5pt 必须加在 label 里而不是外层 HStack 上：加在外层就不属于
+                        // 任何 Button，命中区只有 38pt。选中背景挂在上一层，视觉高度不变。
+                        .padding(.vertical, 2.5)
                         // 命中区域必须显式声明：plain 样式下 SwiftUI 只把 label 的
                         // 绘制内容当作可点区域，frame/padding 撑出的透明空白不参与命中。
                         // 未选中项没有背景，不加这行就只有字形本身能点中。
@@ -276,7 +293,7 @@ struct SegmentedSelector<T: Hashable & Identifiable>: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(2.5)
+        .padding(.horizontal, 2.5)
         .background(Theme.surfaceMuted, in: .rect(cornerRadius: 10.5, style: .continuous))
     }
 }

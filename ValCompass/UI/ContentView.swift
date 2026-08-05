@@ -124,8 +124,9 @@ struct ContentView: View {
 
     private var overview: some View {
         ScrollView {
-            // Lazy：27 行分四个分组卡片，非惰性时全部行都要在首帧前布局并栅格化，
-            // 实测明显拖长启动白屏。惰性化后只构建与视口相交的分组。
+            // Lazy：直接子节点是「头部 + 概览卡 + 4 个分组卡 + 页脚」，非惰性时首屏之外的
+            // 分组卡（连同其中全部行）也要在首帧前布局并栅格化，实测拖长启动白屏。
+            // 推迟的是首屏之下那 1–2 个分组，不是行级惰性。
             LazyVStack(alignment: .leading, spacing: Spacing.l) {
                 brandHeader
                     .padding(.horizontal, Spacing.xs)
