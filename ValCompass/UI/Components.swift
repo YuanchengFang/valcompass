@@ -258,8 +258,9 @@ struct SegmentedSelector<T: Hashable & Identifiable>: View {
                     Text(title(option))
                         .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
                         .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textSecondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                        // 高度取 38pt：连同外层 2.5pt padding 后整条约 43pt，
+                        // 贴近 44pt 触达标准，又不让选择器在图表上方显得笨重。
+                        .frame(maxWidth: .infinity, minHeight: 38)
                         .background {
                             if isSelected {
                                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -267,6 +268,10 @@ struct SegmentedSelector<T: Hashable & Identifiable>: View {
                                     .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
                             }
                         }
+                        // 命中区域必须显式声明：plain 样式下 SwiftUI 只把 label 的
+                        // 绘制内容当作可点区域，frame/padding 撑出的透明空白不参与命中。
+                        // 未选中项没有背景，不加这行就只有字形本身能点中。
+                        .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
             }

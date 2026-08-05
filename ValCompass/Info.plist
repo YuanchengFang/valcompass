@@ -23,7 +23,12 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<!-- 启动屏背景与 Theme.background 同色（含深色变体），
+		     否则系统给纯白/纯黑，启动时会先闪一下再切到纸色背景。 -->
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
