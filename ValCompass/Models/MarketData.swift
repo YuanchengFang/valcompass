@@ -91,7 +91,7 @@ enum MetricDirection: String, Codable, Equatable {
 }
 
 /// 一条辅助估值指标：名称/当前值/百分位/方向/数据截至/一句方法说明
-struct SecondaryMetric: Equatable {
+struct SecondaryMetric: Equatable, Sendable {
     var name: String
     var valueText: String          // 当前值展示文本，如 "5.20%"
     var percentile: Double         // 0–100，近 10 年（不足则全部）序列中的分位
